@@ -35,6 +35,8 @@ struct Cli {
 struct WatchOptions {
     #[arg(long, help = "Watch the user service manager instead of PID 1")]
     user: bool,
+    #[arg(long, help = "Keep Plymouth visible until Escape requests the tree")]
+    plymouth: bool,
     #[arg(
         long,
         help = "Follow a shutdown instead of a boot; started by bootvine-shutdown.service"
@@ -148,6 +150,7 @@ fn watch_boot(options: WatchOptions) -> ExitCode {
         }
     };
     let settings = Settings {
+        plymouth: options.plymouth,
         scope: if options.user {
             Scope::User
         } else {

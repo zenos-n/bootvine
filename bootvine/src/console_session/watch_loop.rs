@@ -24,6 +24,7 @@ use crate::{
 };
 
 pub struct Settings {
+    pub plymouth: bool,
     pub scope: Scope,
     pub shutdown: bool,
     pub target: RootRequest,
@@ -77,7 +78,7 @@ async fn watch_on_console(settings: &Settings, phase: Phase) -> Result<StatusRel
     } else {
         || ScreenInput::PasswordRequests
     };
-    let desk = LiveDesk::take_console(for_system);
+    let desk = LiveDesk::take_console_with_plymouth(for_system, settings.plymouth);
     let password_inputs = requests.map(password_request_inputs).transpose()?;
     let event_inputs = stream::select(
         stream::select(

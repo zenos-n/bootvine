@@ -58,3 +58,18 @@ lists the other sample machines and the scripted demos that play in a terminal.
 ## License
 
 [GPL-3.0-or-later](https://codeberg.org/wvhulle/bootvine/src/branch/main/LICENSE).
+
+## ZenOS Plymouth integration
+
+This downstream preserves the upstream GPL-3.0-or-later project and adds
+`--plymouth`. With a running Plymouth daemon, the tree collects events on tty12
+without taking the foreground. The small `nix/plymouth-bootvine.patch` sends
+Escape to its root-only `/run/bootvine/plymouth.sock`; with no listener Plymouth
+keeps its original details screen. An installed service supplies the absolute
+Plymouth client path through `BOOTVINE_PLYMOUTH_COMMAND`.
+
+On request Bootvine deactivates Plymouth before taking the console. Escape in
+the tree releases it and reactivates the splash; pending systemd passphrase
+requests follow the visible renderer. The process and its collected initrd
+history survive switch-root. Original console-only behavior remains available
+without `--plymouth`, including upstream quit keys and error restoration.

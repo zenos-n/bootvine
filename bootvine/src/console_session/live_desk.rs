@@ -11,6 +11,7 @@ use crate::{
         console_palette::ConsoleLook,
         console_takeover::{ForegroundVt, QuietKernelConsole, console_look, vt_of_stdin},
         passphrase_input::asks_to_quit,
+        plymouth::Plymouth,
         resume_console::{RESUME_CONSOLE_MARKER, resume_console_is_open},
         stream_sources::items_when_readable,
         watch_screen::{ConsoleDesk, Refresh, ScreenInput, WatchEnding},
@@ -18,6 +19,7 @@ use crate::{
 };
 
 pub struct LiveDesk {
+    plymouth: Option<Plymouth>,
     quiet_kernel: Option<QuietKernelConsole>,
     foreground: Option<ForegroundVt>,
     for_system: bool,
@@ -32,15 +34,37 @@ pub struct LiveDesk {
 impl LiveDesk {
     #[must_use]
     pub fn take_console(for_system: bool) -> Self {
+        Self::take_console_with_plymouth(for_system, false)
+    }
+
+    pub fn take_console_with_plymouth(for_system: bool, standby: bool) -> Self {
+        let plymouth = if for_system && standby && super::plymouth::command("--ping") {
+            match Plymouth::open() {
+                Ok(control) => {
+                    eprintln!("bootvine: Plymouth visible; collecting the tree in the background");
+                    Some(control)
+                }
+                Err(error) => {
+                    eprintln!("bootvine: Plymouth handoff unavailable: {error}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let hidden = plymouth.is_some();
         let prompt_elsewhere = for_system && ask_password::requested();
         if prompt_elsewhere {
             eprintln!("bootvine: a password prompt is already showing, staying behind it");
         }
         let own_vt = vt_of_stdin();
         Self {
-            quiet_kernel: for_system.then(QuietKernelConsole::take).flatten(),
+            plymouth,
+            quiet_kernel: (for_system && !hidden)
+                .then(QuietKernelConsole::take)
+                .flatten(),
             foreground: own_vt
-                .filter(|_| !prompt_elsewhere)
+                .filter(|_| !prompt_elsewhere && !hidden)
                 .and_then(ForegroundVt::take),
             for_system,
             own_vt,
@@ -53,7 +77,11 @@ impl LiveDesk {
     }
 
     fn come_forward_once_prompts_are_gone(&mut self) -> bool {
-        if !self.for_system || self.foreground.is_some() || ask_password::requested() {
+        if self.plymouth.is_some()
+            || !self.for_system
+            || self.foreground.is_some()
+            || ask_password::requested()
+        {
             return false;
         }
         self.foreground = self.own_vt.and_then(ForegroundVt::take);
@@ -88,6 +116,19 @@ impl ConsoleDesk for LiveDesk {
     }
 
     fn press_key(&mut self, event: &Event, _now: Duration) -> ControlFlow<WatchEnding> {
+        if self.plymouth.as_ref().is_some_and(|p| p.visible)
+            && matches!(event, Event::Key(key) if key.code == crossterm::event::KeyCode::Esc)
+        {
+            if self.plymouth.as_mut().is_some_and(Plymouth::hide) {
+                eprintln!("bootvine: returning to Plymouth");
+                self.entry = None;
+                if let Some(foreground) = self.foreground.take() {
+                    foreground.restore_previous();
+                }
+                self.quiet_kernel = None;
+            }
+            return ControlFlow::Continue(());
+        }
         let Some(entry) = &mut self.entry else {
             return if asks_to_quit(event, false) {
                 ControlFlow::Break(WatchEnding::ViewerLeft)
@@ -121,6 +162,9 @@ impl ConsoleDesk for LiveDesk {
             eprintln!("bootvine: another program took the console, leaving it there");
             if let Some(foreground) = self.foreground.take() {
                 foreground.stay_switched();
+                if let Some(plymouth) = &mut self.plymouth {
+                    plymouth.visible = false;
+                }
             }
             ControlFlow::Break(WatchEnding::BootCompleted)
         } else if now >= deadline {
@@ -140,12 +184,29 @@ impl ConsoleDesk for LiveDesk {
     }
 
     fn lends_console(&mut self) -> bool {
-        let lent = resume_console_is_open(&self.resume_marker);
+        let lent = self.plymouth.as_ref().is_some_and(|p| !p.visible)
+            || resume_console_is_open(&self.resume_marker);
         self.console_was_lent |= lent;
         lent
     }
 
     fn keep_console_up(&mut self) -> Refresh {
+        if let Some(plymouth) = &mut self.plymouth {
+            if !plymouth.visible && plymouth.requested() && plymouth.show() {
+                self.quiet_kernel = QuietKernelConsole::take();
+                self.foreground = self.own_vt.and_then(ForegroundVt::take);
+                eprintln!(
+                    "bootvine: showing verbose tree on {:?}, activated={}",
+                    self.own_vt,
+                    self.foreground.is_some()
+                );
+                if self.foreground.is_none() {
+                    let _ = plymouth.hide();
+                }
+                self.follow_requests(true);
+                return Refresh::Clear;
+            }
+        }
         if self.lends_console() {
             return Refresh::Steady;
         }
@@ -181,6 +242,7 @@ mod tests {
 
     fn desk_watching(resume_marker: PathBuf) -> LiveDesk {
         LiveDesk {
+            plymouth: None,
             quiet_kernel: None,
             foreground: None,
             for_system: true,

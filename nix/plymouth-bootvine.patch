@@ -1,0 +1,65 @@
+--- a/src/main.c
++++ b/src/main.c
+@@ -21,6 +21,8 @@
+  */
+ 
+ #include <sys/stat.h>
++#include <sys/socket.h>
++#include <sys/un.h>
+ #include <sys/types.h>
+ #include <math.h>
+ #include <limits.h>
+@@ -113,6 +115,7 @@
+         uint32_t                should_be_attached : 1;
+         uint32_t                should_retain_splash : 1;
+         uint32_t                is_inactive : 1;
++        bool                    bootvine_handoff;
+         uint32_t                is_shown : 1;
+         uint32_t                should_force_details : 1;
+         uint32_t                should_force_default_splash : 1;
+@@ -1332,6 +1335,11 @@
+                 ply_trace ("deactivating terminal");
+                 ply_terminal_stop_watching_for_vt_changes (state->local_console_terminal);
+                 ply_terminal_set_buffered_input (state->local_console_terminal);
++                /* KD_GRAPHICS+VT_AUTO ignores VT_ACTIVATE even when it returns success. */
++                if (state->bootvine_handoff) {
++                        ply_terminal_ignore_mode_changes (state->local_console_terminal, false);
++                        ply_terminal_set_mode (state->local_console_terminal, PLY_TERMINAL_MODE_TEXT);
++                }
+                 ply_terminal_close (state->local_console_terminal);
+         }
+ 
+@@ -1447,6 +1455,7 @@
+         ply_device_manager_unpause (state->device_manager);
+ 
+         state->is_inactive = false;
++        state->bootvine_handoff = false;
+ 
+         update_display (state);
+ }
+@@ -1651,6 +1660,25 @@
+                 has_vt_consoles = false;
+         }
+ 
++        if (has_vt_consoles == true) {
++                struct sockaddr_un address = { .sun_family = AF_UNIX };
++                int fd = socket (AF_UNIX, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
++                bool handed_off = false;
++
++                /* Try the verbose viewer before themes consume Escape themselves. */
++                strcpy (address.sun_path, "/run/bootvine/plymouth.sock");
++                if (fd >= 0) {
++                        handed_off = sendto (fd, "show", 4, MSG_DONTWAIT,
++                                             (struct sockaddr *) &address, sizeof address) == 4;
++                        close (fd);
++                }
++                if (handed_off) {
++                        state->bootvine_handoff = true;
++                        return;
++                }
++        }
++
++        /* Missing or failed viewers keep Plymouth's original details behavior. */
+         if (validate_input (state, "", "\e") && has_vt_consoles == true)
+                 toggle_between_splash_and_details (state);
+ }

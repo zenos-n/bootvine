@@ -152,7 +152,10 @@ impl ForegroundVt {
     pub(super) fn take(own: u16) -> Option<Self> {
         let previous = active_vt()?;
         if previous != own {
-            activate(own).ok()?;
+            if let Err(error) = activate(own) {
+                eprintln!("bootvine: cannot activate tty{own}: {error}");
+                return None;
+            }
         }
         Some(Self { own, previous })
     }
@@ -163,6 +166,11 @@ impl ForegroundVt {
 
     pub(super) fn taken_away(&self) -> bool {
         active_vt().is_some_and(|active| active != self.own)
+    }
+
+    pub(super) fn restore_previous(self) {
+        let _ = activate(self.previous);
+        mem::forget(self);
     }
 
     pub(super) fn stay_switched(self) {

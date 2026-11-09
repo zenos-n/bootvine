@@ -3,6 +3,7 @@ pub mod console_palette;
 pub mod console_takeover;
 pub mod live_desk;
 pub mod passphrase_input;
+pub mod plymouth;
 pub mod resume_console;
 pub mod stream_sources;
 pub mod watch_loop;
